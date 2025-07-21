@@ -98,10 +98,6 @@ python3 main_laptop.py -b model/yolov3.weights -x model/yolo3.cfg -l labels.txt 
 - **Labels**: `labels.txt` must contain one class name per line, matching the model's output.
 - **Performance**: NCS2 (OpenVINO) provides hardware acceleration on Raspberry Pi. YOLOv3 is robust and works well on both Pi and laptop.
 
-## License
-
-See `LICENSE`.
-
 ## Arguments
 
 - `-b`, `--bin`: Path to OpenVINO .bin file
@@ -116,7 +112,3 @@ See `LICENSE`.
 - `q`: Quit
 - Up arrow: Increase confidence threshold
 - Down arrow: Decrease confidence threshold
-
-## License
-
-See `LICENSE`.
