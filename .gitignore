@@ -1,0 +1,4 @@
+*model
+# Ignore YOLOv3 model files
+model/yolov3.weights
+model/yolo3.cfg
