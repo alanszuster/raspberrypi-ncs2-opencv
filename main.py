@@ -21,16 +21,23 @@ def parse_args():
 
 
 def load_network(args):
-	if args.bin:
-		print("[INFO] OpenVINO format")
-		net = cv2.dnn.readNet(args.xml, args.bin)
-	elif args.protobox:
+	if args.bin and args.xml:
+		if args.bin.endswith('.weights') and args.xml.endswith('.cfg'):
+			print("[INFO] YOLO/Darknet format")
+			net = cv2.dnn.readNet(args.bin, args.xml)
+			model_type = 'yolo'
+		else:
+			print("[INFO] OpenVINO format")
+			net = cv2.dnn.readNet(args.xml, args.bin)
+			model_type = 'openvino'
+	elif args.protobox and args.protoboxtxt:
 		print("[INFO] Tensorflow format")
 		net = cv2.dnn.readNetFromTensorflow(args.protobox, args.protoboxtxt)
+		model_type = 'ssd'
 	else:
-		raise ValueError("No model files provided.")
+		raise ValueError("No model files provided or missing config.")
 	net.setPreferableTarget(cv2.dnn.DNN_TARGET_MYRIAD)
-	return net
+	return net, model_type
 
 
 def load_labels(labels_path):
@@ -41,24 +48,62 @@ def load_labels(labels_path):
 
 
 def classify_frame(net, inputQueue, outputQueue):
+	# model_type must be passed in or set globally
+	global model_type
 	while True:
 		if not inputQueue.empty():
 			frame = inputQueue.get()
-			blob = cv2.dnn.blobFromImage(frame, 0.007843, size=(300, 300),
-										 mean=(127.5,127.5,127.5), swapRB=False, crop=False)
-			net.setInput(blob)
-			out = net.forward()
-			data_out = []
-			for detection in out.reshape(-1, 7):
-				obj_type = int(detection[1]-1)
-				confidence = float(detection[2])
-				xmin = int(detection[3] * frame.shape[1])
-				ymin = int(detection[4] * frame.shape[0])
-				xmax = int(detection[5] * frame.shape[1])
-				ymax = int(detection[6] * frame.shape[0])
-				if confidence > 0:
-					data_out.append((obj_type, confidence, xmin, ymin, xmax, ymax))
-			outputQueue.put(data_out)
+			if model_type == 'yolo':
+				blob = cv2.dnn.blobFromImage(frame, 1/255.0, (416, 416), swapRB=True, crop=False)
+				net.setInput(blob)
+				layer_names = net.getLayerNames()
+				output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers()]
+				outs = net.forward(output_layers)
+				frame_height, frame_width = frame.shape[:2]
+				data_out = []
+				conf_threshold = 0.5
+				nms_threshold = 0.4
+				boxes = []
+				confidences = []
+				class_ids = []
+				for out in outs:
+					for detection in out:
+						scores = detection[5:]
+						class_id = np.argmax(scores)
+						confidence = scores[class_id]
+						if confidence > conf_threshold:
+							center_x = int(detection[0] * frame_width)
+							center_y = int(detection[1] * frame_height)
+							w = int(detection[2] * frame_width)
+							h = int(detection[3] * frame_height)
+							x = int(center_x - w / 2)
+							y = int(center_y - h / 2)
+							boxes.append([x, y, w, h])
+							confidences.append(float(confidence))
+							class_ids.append(class_id)
+				indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold, nms_threshold)
+				for i in indices:
+					i = i[0] if isinstance(i, (list, tuple, np.ndarray)) else i
+					box = boxes[i]
+					x, y, w, h = box
+					data_out.append((class_ids[i], confidences[i], x, y, x + w, y + h))
+				outputQueue.put(data_out)
+			else:
+				blob = cv2.dnn.blobFromImage(frame, 0.007843, size=(300, 300),
+											mean=(127.5,127.5,127.5), swapRB=False, crop=False)
+				net.setInput(blob)
+				out = net.forward()
+				data_out = []
+				for detection in out.reshape(-1, 7):
+					obj_type = int(detection[1]-1)
+					confidence = float(detection[2])
+					xmin = int(detection[3] * frame.shape[1])
+					ymin = int(detection[4] * frame.shape[0])
+					xmax = int(detection[5] * frame.shape[1])
+					ymax = int(detection[6] * frame.shape[0])
+					if confidence > 0:
+						data_out.append((obj_type, confidence, xmin, ymin, xmax, ymax))
+				outputQueue.put(data_out)
 
 
 def draw_detections(frame, detections, labels, confThreshold, font):
@@ -92,7 +137,9 @@ def main():
 	fps = 0.0
 	qfps = 0.0
 
-	net = load_network(args)
+	net, model_type_local = load_network(args)
+	global model_type
+	model_type = model_type_local
 	labels = load_labels(args.labels)
 
 	camera = PiCamera()
